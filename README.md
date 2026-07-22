@@ -1,50 +1,62 @@
-# Outlook Protocol Register (Lite)
+# Outlook Protocol Register
 
-基于纯 HTTP 协议的 Microsoft Outlook / Hotmail 注册脚本精简版。  
-不启动浏览器，直接调用 Microsoft 注册相关接口，并通过 CaptchaRun 处理 PerimeterX（PxCaptcha2）人机验证。
+基于纯 HTTP 协议的 Microsoft Outlook / Hotmail **自动注册 + OAuth 授权** 工具。  
+不依赖浏览器 UI，直接调用 Microsoft 注册 / 登录相关接口，并通过 CaptchaRun 处理 PerimeterX（PxCaptcha2）人机验证。
 
-> 本项目从完整注册机中抽取了**仅注册**流程，已移除 OAuth2 授权、多线程批量、账号导入等附加能力。
+注册成功后会自动走 OAuth2 授权，获取可用于邮件收发的 `refresh_token`，并支持写入本地文件、多线程批量、补授权、导入外部邮件管理系统。
 
+对应脚本：`outlook注册机.py`
+
+> ⚠️ 本项目涉及自动化账号注册与接口模拟，请仅用于合法、授权的研究与测试。请遵守 Microsoft 服务条款与当地法律法规。
 
 ---
 
 ## 功能特性
 
-- **纯协议注册**：使用 `curl_cffi` 模拟浏览器 TLS/HTTP 指纹，无需 Selenium / Playwright
-- **自动过 PX 验证**：对接 CaptchaRun `PxCaptcha2`（silentToken → pressToken）
-- **代理支持**：支持单代理或代理列表文件
-- **随机资料**：用户名、密码、姓名、生日可自动生成
-- **结果落盘**：注册成功后追加写入本地文件
+- **纯协议注册**：`curl_cffi` 模拟浏览器 TLS/HTTP 指纹，无需 Selenium / Playwright
+- **CaptchaRun 打码**：自动处理 `PxCaptcha2`（silentToken → pressToken）
+- **注册后 OAuth2 授权**：模拟浏览器登录，获取 `access_token` / `refresh_token`
+- **多线程批量**：`--threads` 并发注册，线程间随机代理与随机资料
+- **代理池**：支持单代理 / 代理文件，自动解析多种代理格式
+- **代理地理探测**：根据代理 IP 自动识别国家 / 时区，供打码使用
+- **结果落盘**：`email----password----client_id----refresh_token`
+- **补授权模式**：`--fix-auth` 扫描旧账号文件，补全缺失的 refresh_token
+- **可选导入 mail_manager**：注册+授权成功后自动 POST 到外部管理系统
 
 ---
 
-## 注册流程
+## 整体流程
 
 ```text
-1. GET  signup.live.com
-   └─ 提取 ServerData（apiCanary / uaid）
-   └─ 加载 DFP + PX iframe
-
-2. POST CheckAvailableSigninNames
-   └─ 检查邮箱用户名是否可用
-
-3. POST risk/initialize
-   └─ 获取 continuationToken
-
-4. CaptchaRun 创建 PxCaptcha2 任务
-   └─ 等待 silentToken
-
-5. POST risk/verify（第 1 次）
-   └─ 通常返回 riskChallengeRequired
-
-6. CaptchaRun 等待 pressToken
-   └─ 拿到 _px3 / _pxde / _pxvid
-
-7. POST risk/verify（第 2 次）
-   └─ 提交 challengeSolution，获取最终 token
-
-8. POST CreateAccount
-   └─ 创建账号
+┌──────────────────────────────────────────────┐
+│ 1. 注册阶段                                   │
+│   GET signup.live.com                         │
+│   → 提取 ServerData / DFP / PX iframe         │
+│   → CheckAvailableSigninNames                 │
+│   → risk/initialize                           │
+│   → CaptchaRun PxCaptcha2                     │
+│   → risk/verify (1st / 2nd)                   │
+│   → CreateAccount                             │
+└──────────────────────────────────────────────┘
+                      │
+                      ▼
+┌──────────────────────────────────────────────┐
+│ 2. OAuth2 授权阶段                            │
+│   GET oauth2/v2.0/authorize                   │
+│   → GetCredentialType                         │
+│   → login.live.com 密码页                     │
+│   → checkpassword.srf                         │
+│   → ppsecure/post.srf                         │
+│   → 跳过 passkey / KMSI / Consent             │
+│   → code 换 token                             │
+└──────────────────────────────────────────────┘
+                      │
+                      ▼
+┌──────────────────────────────────────────────┐
+│ 3. 落盘 / 导入                                │
+│   写入 accounts.json                          │
+│   可选导入 mail_manager                       │
+└──────────────────────────────────────────────┘
 ```
 
 ---
@@ -52,10 +64,10 @@
 ## 环境要求
 
 - Python 3.9+
-- 可用的 HTTP 代理（住宅代理更稳）
+- 可用 HTTP 代理（建议住宅代理）
 - CaptchaRun 账号与 API Token（需支持 `PxCaptcha2`）
 
-### 依赖安装
+### 安装依赖
 
 ```bash
 pip install curl_cffi requests
@@ -70,17 +82,17 @@ pip install curl_cffi requests
 1. 打开官网：https://captcha.run/
 2. 注册并登录控制台
 3. 复制 API Token（Bearer Token）
-4. 确认账户有余额，且支持 `PxCaptcha2`
+4. 确认余额充足，并支持 `PxCaptcha2`
 
 ### 2. 准备代理
 
-单代理示例：
+单代理：
 
 ```text
 http://username:password@host:port
 ```
 
-代理文件 `proxies.txt`（每行一个，支持以下格式）：
+代理文件 `proxies.txt`（每行一个，支持多种格式）：
 
 ```text
 http://user:pass@1.2.3.4:8080
@@ -89,21 +101,25 @@ user:pass@1.2.3.4:8080
 1.2.3.4:8080
 ```
 
-### 3. 运行注册
+### 3. 单线程注册
 
 ```bash
-python mainreg.py \
+python outlook注册机.py \
   --cr-token YOUR_CAPTCHARUN_TOKEN \
-  --proxy http://user:pass@host:port
+  --proxy http://user:pass@host:port \
+  --country US
 ```
 
-或从代理文件随机取一个：
+### 4. 多线程批量注册
 
 ```bash
-python mainreg.py \
+python outlook注册机.py \
   --cr-token YOUR_CAPTCHARUN_TOKEN \
   --proxy-file proxies.txt \
-  --country US
+  --threads 5 \
+  --country US \
+  --domain outlook.com \
+  --output accounts.json
 ```
 
 ---
@@ -112,36 +128,39 @@ python mainreg.py \
 
 | 参数 | 必填 | 默认值 | 说明 |
 |------|------|--------|------|
-| `--cr-token` | ✅ | 无 | CaptchaRun API Token |
-| `--proxy` | 二选一 | 无 | 单个代理地址 |
-| `--proxy-file` | 二选一 | 无 | 代理列表文件（随机取一行） |
-| `--username` | ❌ | 随机 | 邮箱用户名（不含域名） |
-| `--password` | ❌ | 随机 | 账号密码 |
-| `--domain` | ❌ | `outlook.com` | 域名：`outlook.com` / `hotmail.com` |
-| `--country` | ❌ | `US` | 国家 ISO 代码（如 `US` / `CN`） |
-| `--year` / `--month` / `--day` | ❌ | 随机 | 出生日期 |
-| `--firstname` | ❌ | 随机 | 名 |
-| `--lastname` | ❌ | 随机 | 姓 |
-| `--output` | ❌ | `accounts.txt` | 成功账号输出文件 |
+| `--cr-token` | 建议必填 | `填自己打令牌` | CaptchaRun API Token |
+| `--proxy` | 建议 | 无 | 单个代理地址 |
+| `--proxy-file` | 建议 | 无 | 代理列表文件 |
+| `--threads` | ❌ | `1` | 并发线程数 |
+| `--domain` | ❌ | `outlook.com` | `outlook.com` / `hotmail.com` |
+| `--country` | ❌ | `US` | 国家 ISO 代码 |
+| `--username` | ❌ | 随机 | 仅单线程模式有意义 |
+| `--password` | ❌ | 随机 | 仅单线程模式有意义 |
+| `--year` / `--month` / `--day` | ❌ | 随机 | 生日 |
+| `--firstname` / `--lastname` | ❌ | 随机 | 姓名 |
+| `--output` | ❌ | `accounts.json` | 输出文件路径 |
+| `--fix-auth` | ❌ | 关闭 | 扫描输出文件，补全缺失 refresh_token |
+| `--import-url` | ❌ | 占位字符串 | mail_manager 服务器地址 |
+| `--import-password` | ❌ | `apple2024` | mail_manager 访问密码 |
 
-> 注意：`--proxy` 与 `--proxy-file` 至少提供一个，脚本强制要求代理。
+> 实际使用时请把 `--cr-token`、代理、导入地址等占位默认值改成你自己的配置。
 
 ---
 
 ## 使用示例
 
-### 完全随机注册
+### 完全随机单号注册
 
 ```bash
-python mainreg.py \
+python outlook注册机.py \
   --cr-token YOUR_TOKEN \
   --proxy-file proxies.txt
 ```
 
-### 指定邮箱与密码
+### 指定资料注册
 
 ```bash
-python mainreg.py \
+python outlook注册机.py \
   --cr-token YOUR_TOKEN \
   --proxy http://user:pass@host:port \
   --username mytestuser123 \
@@ -153,113 +172,211 @@ python mainreg.py \
   --year 1998 --month 5 --day 12
 ```
 
-### 指定输出文件
+### 5 线程批量注册
 
 ```bash
-python mainreg.py \
+python outlook注册机.py \
   --cr-token YOUR_TOKEN \
   --proxy-file proxies.txt \
-  --output success_accounts.txt
+  --threads 5 \
+  --output accounts.json
+```
+
+### 补授权（不注册，只补 refresh_token）
+
+```bash
+python outlook注册机.py \
+  --fix-auth \
+  --output accounts.json \
+  --proxy-file proxies.txt
+```
+
+### 注册后自动导入 mail_manager
+
+```bash
+python outlook注册机.py \
+  --cr-token YOUR_TOKEN \
+  --proxy-file proxies.txt \
+  --threads 3 \
+  --import-url https://your-mail-manager.example.com \
+  --import-password your_password
 ```
 
 ---
 
 ## 输出格式
 
-注册成功后，账号会以追加方式写入 `--output` 指定文件：
+默认写入 `--output`（默认 `accounts.json`，实际是按行文本）：
 
 ```text
-xxx@outlook.com----Password123!
-yyy@hotmail.com----Abcd4567!
+xxx@outlook.com----Password123!----9e5f94bc-e8a4-4e73-b8be-63364c29d753----M.C5...refresh_token...
+yyy@hotmail.com----Abcd4567!----9e5f94bc-e8a4-4e73-b8be-63364c29d753----
 ```
 
-格式：
+字段含义：
 
 ```text
-email----password
+email----password----client_id----refresh_token
 ```
 
-控制台成功时会打印类似：
-
-```text
-────────────────────────────────────────
-│ 注册成功
-│ 邮箱:  xxx@outlook.com
-│ 密码:  xxxxxxxx
-│ 姓名:  John Smith
-│ 生日:  1998-5-12
-────────────────────────────────────────
-```
-
-失败时退出码为 `1`，并打印错误原因，例如：
-
-- `username_unavailable`：用户名已被占用
-- `no_captcha_solver`：未提供 CaptchaRun token
-- 打码超时 / 打码失败
-- 网络或接口异常
+- 第 1 段：邮箱
+- 第 2 段：密码
+- 第 3 段：OAuth client_id（Thunderbird 公共客户端）
+- 第 4 段：refresh_token（OAuth 失败时可能为空）
 
 ---
 
-## 项目结构（核心类）
+## OAuth2 说明
+
+注册成功后会自动调用 `oauth2_authorize()`：
+
+1. 打开 Microsoft OAuth 授权页
+2. 校验账号密码
+3. 处理 passkey / KMSI / Consent 中断页
+4. 获取 authorization `code`
+5. 用 `code` 换取：
+   - `access_token`
+   - `refresh_token`
+
+### 使用的客户端
 
 ```text
-mainreg.py
-├── CaptchaRunSolver          # CaptchaRun PxCaptcha2 打码
-├── MicrosoftSignupProtocol   # Microsoft 注册协议实现
+client_id  = 9e5f94bc-e8a4-4e73-b8be-63364c29d753
+redirect   = https://login.microsoftonline.com/common/oauth2/nativeclient
+```
+
+### 主要 scope
+
+- `offline_access`
+- `openid profile`
+- `https://graph.microsoft.com/Mail.Read`
+- `https://graph.microsoft.com/Mail.Send`
+- `https://graph.microsoft.com/IMAP.AccessAsUser.All`
+- `https://graph.microsoft.com/POP.AccessAsUser.All`
+- `https://graph.microsoft.com/SMTP.Send`
+
+> 注意：本脚本会获取邮件相关 token，但**不会**在脚本内读取收件箱或提取邮件验证码。  
+> 读信通常需要你另行使用 Graph / IMAP，或导入到 mail_manager 后处理。
+
+---
+
+## 核心模块
+
+```text
+outlook注册机.py
+├── CaptchaRunSolver              # CaptchaRun PxCaptcha2 打码
+├── MicrosoftSignupProtocol       # 微软注册协议
 │   ├── step1_fetch_signup_page
-│   ├── step2_check_username
+│   ├── step4_check_username
 │   ├── step3_risk_initialize
-│   ├── step4_risk_verify_first
-│   ├── step5_risk_verify_second
-│   ├── step6_create_account
-│   └── register              # 串联完整流程
-└── main()                    # CLI 入口
+│   ├── step5_risk_verify
+│   ├── step5b_risk_verify
+│   ├── step7_create_account
+│   └── register
+├── oauth2_authorize()            # 注册后 OAuth2 登录拿 token
+├── _register_one()               # 单线程任务：注册 + OAuth + 落盘 + 导入
+├── _fix_auth()                   # 扫描账号文件补授权
+├── _import_to_server()           # 导入 mail_manager
+└── main()                        # CLI 入口 / 多线程调度 / 统计
 ```
 
 ---
 
-## 与完整版的区别
+## 运行统计
 
-| 能力 | 本精简版 | 完整版注册机 |
-|------|----------|--------------|
+任务结束后会打印类似：
+
+```text
+══════════════════════════════════════════════════
+  任务统计 (共 N 个)
+══════════════════════════════════════════════════
+  注册 + OAuth2 成功:  x
+  注册成功, OAuth2 失败: y
+  打码失败:            z
+  注册失败 (其他):     w
+  导入服务器成功:       a
+  导入服务器失败:       b
+══════════════════════════════════════════════════
+```
+
+---
+
+## 与精简版的区别
+
+| 能力 | 完整版（本项目） | 精简版 `outlook_register_only.py` |
+|------|------------------|-----------------------------------|
 | 协议注册 | ✅ | ✅ |
 | CaptchaRun PX 打码 | ✅ | ✅ |
-| OAuth2 拿 refresh_token | ❌ | ✅ |
-| 多线程批量 | ❌ | ✅ |
-| 导入 mail_manager | ❌ | ✅ |
-| 补授权 fix-auth | ❌ | ✅ |
+| OAuth2 拿 refresh_token | ✅ | ❌ |
+| 多线程批量 | ✅ | ❌ |
+| 导入 mail_manager | ✅ | ❌ |
+| 补授权 `--fix-auth` | ✅ | ❌ |
+| 输出含 client_id / token | ✅ | 仅 email----password |
 
-本仓库目标：**流程清晰、依赖少、只做注册。**
+如果你只需要“开号”，用精简版更清晰；  
+如果你需要“可程序化使用的邮箱 token”，用本完整版。
 
 ---
 
 ## 常见问题
 
-### 1. 提示需要代理？
+### 1. 必须要代理吗？
 
-脚本默认强制走代理。请使用 `--proxy` 或 `--proxy-file`。
+实际使用中建议必须。  
+CaptchaRun 的 `PxCaptcha2` 任务会带上代理信息，注册与打码应尽量使用同一出口 IP。
 
-### 2. CaptchaRun 一直失败？
+### 2. CaptchaRun 失败怎么办？
 
 检查：
 
-- Token 是否正确（`Authorization: Bearer ...`）
-- 账户余额是否充足
+- `--cr-token` 是否正确
+- 账户余额是否足够
 - 是否支持 `PxCaptcha2`
-- 代理是否可用，且与 CaptchaRun 任务使用同一代理信息
+- 代理是否可用
 
-### 3. 用户名不可用？
+### 3. 注册成功但 OAuth 失败？
 
-换一个 `--username`，或留空让脚本随机生成。
+账号仍会保存，但 `refresh_token` 为空。  
+可以稍后用：
 
-### 4. 注册成功率不稳定？
+```bash
+python outlook注册机.py --fix-auth --output accounts.json --proxy-file proxies.txt
+```
+
+补授权。
+
+### 4. 为什么叫 `accounts.json`，内容却是文本行？
+
+历史命名问题。实际输出是按行文本，不是标准 JSON 数组。
+
+### 5. 能直接读邮件验证码吗？
+
+不能。  
+本脚本只负责：
+
+- 注册
+- OAuth 拿 token
+- 保存 / 导入
+
+如需读信，需要自行使用 `refresh_token` 调 Graph 或 IMAP。
+
+### 6. 成功率不稳定？
 
 常见影响因素：
 
-- 代理质量（数据中心代理通常更差）
-- 地区与 `--country` 是否匹配
-- CaptchaRun 解题耗时与成功率
+- 代理质量与地区
+- CaptchaRun 解题成功率 / 延迟
 - Microsoft 风控策略变化
+- 并发过高
+
+---
+
+## 安全建议
+
+- 不要把真实 `--cr-token`、代理密码、import 密码提交到 GitHub
+- 建议用环境变量或本地配置文件管理密钥
+- 输出的 `accounts.json` 含账号凭证，注意权限与备份
+- 公开仓库前先检查是否误传账号、token、代理
 
 ---
 
@@ -267,7 +384,7 @@ mainreg.py
 
 本项目仅供协议研究、接口学习与个人测试。  
 请遵守 Microsoft 服务条款及当地法律法规。  
-因滥用自动化注册导致的封号、封 IP、账号损失等，作者不承担任何责任。
+因滥用自动化注册、批量开号、绕过风控等行为导致的任何损失或法律责任，由使用者自行承担。
 
 ---
 
