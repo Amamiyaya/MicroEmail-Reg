@@ -92,7 +92,7 @@ user:pass@1.2.3.4:8080
 ### 3. 运行注册
 
 ```bash
-python outlook_register_only.py \
+python mainreg.py \
   --cr-token YOUR_CAPTCHARUN_TOKEN \
   --proxy http://user:pass@host:port
 ```
@@ -100,7 +100,7 @@ python outlook_register_only.py \
 或从代理文件随机取一个：
 
 ```bash
-python outlook_register_only.py \
+python mainreg.py \
   --cr-token YOUR_CAPTCHARUN_TOKEN \
   --proxy-file proxies.txt \
   --country US
@@ -133,7 +133,7 @@ python outlook_register_only.py \
 ### 完全随机注册
 
 ```bash
-python outlook_register_only.py \
+python mainreg.py \
   --cr-token YOUR_TOKEN \
   --proxy-file proxies.txt
 ```
@@ -141,7 +141,7 @@ python outlook_register_only.py \
 ### 指定邮箱与密码
 
 ```bash
-python outlook_register_only.py \
+python mainreg.py \
   --cr-token YOUR_TOKEN \
   --proxy http://user:pass@host:port \
   --username mytestuser123 \
@@ -156,7 +156,7 @@ python outlook_register_only.py \
 ### 指定输出文件
 
 ```bash
-python outlook_register_only.py \
+python mainreg.py \
   --cr-token YOUR_TOKEN \
   --proxy-file proxies.txt \
   --output success_accounts.txt
@@ -203,7 +203,7 @@ email----password
 ## 项目结构（核心类）
 
 ```text
-outlook_register_only.py
+mainreg.py
 ├── CaptchaRunSolver          # CaptchaRun PxCaptcha2 打码
 ├── MicrosoftSignupProtocol   # Microsoft 注册协议实现
 │   ├── step1_fetch_signup_page
